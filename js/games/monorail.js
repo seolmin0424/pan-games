@@ -96,7 +96,7 @@ function adjacentOK(board, ts) {
   return !left.length;
 }
 
-export default {
+const game = {
   id: 'monorail', title: '모노레일', src: '더 지니어스', players: [2, 2], def: 2,
   glyph: `<svg viewBox="0 0 44 44"><path d="M8 30V18a6 6 0 0 1 6-6h16a6 6 0 0 1 6 6v6a6 6 0 0 1-6 6H8" fill="none" stroke="var(--ink)" stroke-width="3"/><rect x="14" y="26" width="16" height="8" rx="2" fill="var(--accent)"/></svg>`,
   rules: [
@@ -257,3 +257,11 @@ function candidates(board, left) {
   if (!out.length) for (const k in board) { const [r, c] = k.split(',').map(Number); D.forEach(([dr, dc]) => KLIST.forEach(kk => { if (inb(r + dr, c + dc) && !board[key(r + dr, c + dc)]) push([{ r: r + dr, c: c + dc, k: kk }]); })); }
   return out;
 }
+
+export default game;
+Object.assign(game, {
+  brief: (s, me) => `모노레일. 남은 타일 ${s.left}장. ${s.phase === 'complete' ? `${s.decl === me ? '네가' : '상대가'} 불가능을 선언해서 ${s.decl === me ? '상대가' : '네가'} 완성을 시도 중` : `${s.turn === me ? '네' : '상대'} 차례`}.`,
+  summary: (s, names) => `${s.over ? s.over.note : ''}. 놓인 타일 ${16 - s.left}장, ${s.moves}수. 승자 ${s.over ? names[s.over.winners[0]] : '-'}.`,
+  eventText: (s, f, me, names) => f.kind === 'declare' ? `${s.decl === me ? '네가' : names[s.decl] + '이(가)'} 불가능을 선언했다. 남은 타일 ${s.left}장` : null,
+  myEvent: (s, i, a) => a.declare ? '네가 불가능을 선언했다' : `네가 타일 ${a.tiles ? a.tiles.length : 0}장을 놓았다. 남은 ${s.left}장`,
+});

@@ -28,7 +28,7 @@ function digitsSVG(ids, opts = {}) {
   return g + '</svg>';
 }
 
-export default {
+const game = {
   id: 'mixmatch', title: '믹스 앤 매치', src: '피의 게임 3', players: [1, 4], def: 4,
   glyph: `<svg viewBox="0 0 44 44"><path d="M10 8h10M8 10v10M22 10v10M10 22h10M8 24v10M10 36h10" stroke="var(--seg)" stroke-width="3" stroke-linecap="round" opacity=".9"/><path d="M26 8h10M38 10v10M38 24v10M26 36h10" stroke="var(--seg)" stroke-width="3" stroke-linecap="round" opacity=".45"/></svg>`,
   rules: [
@@ -123,3 +123,10 @@ function newRound(s, now) {
   const fa = split3(halves(A)), fb = split3(halves(B));
   Object.assign(s, { A, B, frames: [fa[0], fb[0], fa[1], fb[1], fa[2], fb[2]], start: now + 3000, vis: -1, done: false, phase: 'show', until: now + 3000 + 6 * s.iv + 30000, lock: Array(s.n).fill(0), wrongs: [], got: -1 });
 }
+
+export default game;
+Object.assign(game, {
+  brief: (s, me) => `믹스 앤 매치 ${s.round}/${s.rounds}라운드. 점수: 너 ${s.sc[me]}, 최다 ${Math.max(...s.sc)}.`,
+  summary: (s, names) => `최종 점수: ${range(s.n).map(i => `${names[i]} ${s.sc[i]}`).join(', ')}.`,
+  eventText: (s, f, me, names) => f.kind === 'right' ? `${f.seat === me ? '네가' : names[f.seat] + '이(가)'} 정답(${s.A}+${s.B}=${s.A + s.B})을 맞혔다` : f.kind === 'wrong' ? `${f.seat === me ? '네가' : names[f.seat] + '이(가)'} 오답을 내서 10초 잠겼다` : null,
+});

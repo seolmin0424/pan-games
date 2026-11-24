@@ -1,4 +1,6 @@
 import { esc, rint, rand, act, ui, pc, nm, hud, fx, range, shuffle, bar, pick } from '../util.js';
+import * as LLM from '../llm.js';
+import { compile, validate } from '../formula.js';
 
 const gcd = (a, b) => b ? gcd(b, a % b) : a;
 const ds = v => String(Math.abs(v)).split('').reduce((x, y) => x + +y, 0);
@@ -29,7 +31,7 @@ export const RULES = [
 ];
 const ITEMS = { D: 'DOUBLE', S: 'SECRET', F: '무감점' };
 
-export default {
+const game = {
   id: 'mystery', title: '미스터리 사인', src: '더 지니어스: 그랜드 파이널', players: [2, 4], def: 2,
   glyph: `<svg viewBox="0 0 44 44"><text x="22" y="30" text-anchor="middle" font-size="24" font-family="serif" font-weight="700" fill="var(--accent)">?</text><circle cx="22" cy="22" r="16" fill="none" stroke="var(--line-2)" stroke-width="2"/></svg>`,
   rules: [
@@ -41,9 +43,10 @@ export default {
   options: [
     { k: 'rounds', label: '라운드', ch: [[5, '5'], [7, '7'], [11, '11']], d: 7 },
     { k: 'win', label: '버저 시간', ch: [[15, '15초'], [30, '30초'], [60, '60초']], d: 30 },
+    { k: 'gen', label: '출제', ch: [['lib', '기본'], ['g1', 'Gemini 보통'], ['g2', 'Gemini 어려움']], d: 'lib' },
   ],
   setup(n, o, now) {
-    const s = { n, rounds: o.rounds || 7, win: o.win || 30, round: 0, sc: Array(n).fill(0), items: range(n).map(() => ({ D: 1, S: 1, F: 1 })), starter: rint(n), ruleBag: shuffle(range(RULES.length)), over: null };
+    const s = { n, gen: o.gen || 'lib', past: [], wrongs: [], rounds: o.rounds || 7, win: o.win || 30, round: 0, sc: Array(n).fill(0), items: range(n).map(() => ({ D: 1, S: 1, F: 1 })), starter: rint(n), ruleBag: shuffle(range(RULES.length)), over: null };
     newRound(s, now); return s;
   },
   waiting(s) {
@@ -58,7 +61,7 @@ export default {
   tick(s, now) {
     if (s.phase === 'buzz' && now >= s.until) { nextHint(s, now); return true; }
     if (s.phase === 'answer' && now >= s.until) { wrong(s, s.ans, now); return true; }
-    if (s.phase === 'reveal' && now >= s.until) { s.round >= s.rounds ? end(s) : newRound(s, now); return true; }
+    if (s.phase === 'reveal' && now >= s.until) { record(s); s.round >= s.rounds ? end(s) : newRound(s, now); return true; }
     return false;
   },
   act(s, seat, a, now) {
@@ -79,7 +82,7 @@ export default {
       if ((A === s.X && B === s.Y) || (A === s.Y && B === s.X)) return 'pair';
       const k = s.hints.length;
       const hid = k === 0 ? s.giver.filter(g => s.use[g] && s.use[g].S) : [];
-      s.hints.push({ a: A, b: B, r: RULES[s.rule][1](A, B), by: [...s.giver], hid });
+      s.hints.push({ a: A, b: B, r: ruleFn(s)(A, B), by: [...s.giver], hid });
       s.phase = 'buzz'; s.until = now + s.win * 1000; s.from = now; s.excl = []; s.passed = [];
       fx(s, 'hint');
       return;
@@ -101,7 +104,7 @@ export default {
         s.got = seat; s.phase = 'reveal'; s.from = now; s.until = now + 7000;
         fx(s, 'right', { seat }); return;
       }
-      s.lastWrong = { seat, v: +a.answer };
+      s.lastWrong = { seat, v: +a.answer }; s.wrongs.push(+a.answer);
       wrong(s, seat, now); return;
     }
     return 'no';
@@ -116,7 +119,7 @@ export default {
       const pickIt = k => it[k] && (left <= 1 || Math.random() < 1 / left + (k === 'D' && beh > 0 ? .2 : 0));
       return { a: { items: { D: pickIt('D'), S: pickIt('S'), F: pickIt('F') } }, d: rand(600, 1500) };
     }
-    const cons = known.filter(i => s.hints.every(h => (h.hid.length && h.hid.some(x => x !== me)) || RULES[i][1](h.a, h.b) === h.r));
+    const cons = s.custom ? [] : known.filter(i => s.hints.every(h => (h.hid.length && h.hid.some(x => x !== me)) || RULES[i][1](h.a, h.b) === h.r));
     const answers = cons.map(i => RULES[i][1](s.X, s.Y));
     const uniq = [...new Set(answers)];
     if ((s.phase === 'h1' || s.phase === 'h2') && this.waiting(s)[0] === me) {
@@ -149,6 +152,7 @@ export default {
   },
   render(ctx) {
     const s = ctx.state, me = ctx.seat, f = ctx.fresh();
+    if (s.phase === 'gen') return `${hud(ctx, range(s.n).map(i => ({ i, v: s.sc[i] })))}<div class="curtain"><div><h2 class="think">출제 중</h2><p class="muted">Gemini가 ${s.round}라운드 규칙을 만들고 있어요</p></div></div>`;
     const view = me;
     const hv = (h, side) => (h.hid.includes(h.by[side]) && view !== h.by[side] && !s.over && s.phase !== 'reveal') ? '?' : (side ? h.b : h.a);
     const tags = i => s.use[i] ? Object.keys(s.use[i]).map(k => ITEMS[k]).join(' ') : '';
@@ -173,7 +177,7 @@ export default {
       if (actors.includes(s.ans)) actHTML = `<form class="panel" data-form="game"><div class="spread"><h3 style="margin:0">정답은?</h3><span class="timer" data-until="${s.until}"></span></div><input type="hidden" name="s" value="${s.ans}"><div class="row mt"><input id="mans" data-keep="${s.round}-${s.hints.length}-${s.ans}" name="ans" type="number" required style="width:140px;font-family:var(--font-num);font-size:22px" data-autofocus><button class="btn primary" type="submit">제출</button></div></form>`;
       else actHTML = `<div class="panel"><p><span style="color:${pc(s.ans)}">${esc(ctx.names[s.ans])}</span> 답하는 중</p></div>`;
     } else if (s.phase === 'reveal') {
-      actHTML = `<div class="panel ${f ? 'pop' : ''}" ${f && f.kind === 'right' ? 'data-burst=""' : ''}><h3>${s.got >= 0 ? `${esc(ctx.names[s.got])} 정답` : '정답자 없음'}</h3><p style="font-family:var(--font-display);font-size:22px">${esc(RULES[s.rule][0])}</p><p class="muted small mt">다음 라운드 <span class="timer" data-until="${s.until}"></span></p></div>`;
+      actHTML = `<div class="panel ${f ? 'pop' : ''}" ${f && f.kind === 'right' ? 'data-burst=""' : ''}><h3>${s.got >= 0 ? `${esc(ctx.names[s.got])} 정답` : '정답자 없음'}</h3><p style="font-family:var(--font-display);font-size:22px">${esc(ruleName(s))}</p><p class="muted small mt">다음 라운드 <span class="timer" data-until="${s.until}"></span></p></div>`;
     }
     const problem = `<div style="font-family:var(--font-display);font-size:clamp(44px,8vw,84px);line-height:1;display:flex;gap:.3em;align-items:baseline;flex-wrap:wrap">
       <span>${s.X}</span><span style="color:var(--accent)">?</span><span>${s.Y}</span><span class="muted">=</span><span class="${f && f.kind === 'right' ? 'pop' : ''}" style="color:${s.phase === 'reveal' ? 'var(--seg)' : 'var(--line-2)'}">${s.phase === 'reveal' || s.over ? s.answer : '□'}</span></div>`;
@@ -187,14 +191,45 @@ export default {
 
 function newRound(s, now) {
   s.round++;
-  if (!s.ruleBag.length) s.ruleBag = shuffle(range(RULES.length));
-  s.rule = s.ruleBag.pop();
-  let X, Y, A;
-  do { X = 2 + rint(38); Y = 2 + rint(38); A = RULES[s.rule][1](X, Y); } while (X === Y || !Number.isFinite(A));
-  Object.assign(s, { X, Y, answer: A, hints: [], phase: 'items', use: Array(s.n).fill(null), excl: [], passed: [], got: -1, lastWrong: null });
+  Object.assign(s, { hints: [], use: Array(s.n).fill(null), excl: [], passed: [], got: -1, lastWrong: null, wrongs: [], custom: null });
   s.starter = (s.starter + 1) % s.n;
+  if (s.gen !== 'lib') { s.phase = 'gen'; return; }
+  libRule(s); beginRound(s);
+}
+function libRule(s) {
+  if (!s.ruleBag.length) s.ruleBag = shuffle(range(RULES.length));
+  s.rule = s.ruleBag.pop(); s.custom = null;
+}
+function beginRound(s) {
+  const f = ruleFn(s);
+  let X, Y, A, t = 0;
+  do { X = 2 + rint(38); Y = 2 + rint(38); try { A = f(X, Y); } catch { A = NaN; } } while ((X === Y || !Number.isFinite(A)) && ++t < 500);
+  if (!Number.isFinite(A)) { libRule(s); return beginRound(s); }
+  Object.assign(s, { X, Y, answer: A, phase: 'items' });
   setGivers(s);
 }
+const cache = new Map();
+function ruleFn(s) {
+  if (!s.custom) return RULES[s.rule][1];
+  if (!cache.has(s.custom.f)) cache.set(s.custom.f, compile(s.custom.f, ['a', 'b']));
+  return cache.get(s.custom.f);
+}
+function ruleName(s) { return s.custom ? s.custom.name : RULES[s.rule][0]; }
+const GRAMMAR = '정수, 변수, + - * / (몫, 내림) % ^(0~6 거듭제곱), 괄호, 함수 max min abs digitsum(자릿수 합) rev(자릿수 뒤집기) len(자릿수 개수) gcd lcm concat(숫자 이어붙이기) sq(제곱) if(조건,참,거짓) gt(x,y)(x>y면 1) eq(x,y)';
+async function genRule(s) {
+  const prev = s.past.map(p => p.name).join(', ') || '없음';
+  for (let k = 0; k < 3; k++) {
+    const r = await LLM.json(`너는 두뇌 서바이벌 "미스터리 사인"의 출제자다. 두 자연수 a(앞에 제시된 수), b(뒤에 제시된 수)에 적용되는 숨겨진 연산 ?를 하나 만들어라. 참가자들은 "a ? b = 결과" 예시를 몇 개 보고 규칙을 추론해서 문제의 값을 맞힌다.
+난이도: ${s.gen === 'g2' ? '어려움. 예시 8~12개는 봐야 풀리는 수준. 조건 분기, 자릿수 조작, 비대칭 등을 섞어도 좋다.' : '보통. 예시 4~7개면 감이 오는 수준.'}
+피할 것: 너무 흔한 것(a+b, a*b, a-b 단독), 이전에 낸 규칙(${prev}), 0으로 나누기가 생기는 식.
+식 문법: ${GRAMMAR}. 변수는 a, b만.
+JSON으로만 답: {"formula": "식", "name": "정답 공개 때 보여줄 한국어 설명, 25자 이내"}`, { timeout: 25000, temperature: 1.1 });
+    const f = validate(String(r.formula || ''), ['a', 'b'], () => [1 + rint(60), 1 + rint(60)]);
+    if (f) return { f: String(r.formula), name: String(r.name || r.formula).slice(0, 40) };
+  }
+  return null;
+}
+
 function setGivers(s) { const p = (s.starter + s.hints.length) % s.n; s.giver = [p, (p + 1) % s.n]; }
 function nextHint(s, now) {
   if (s.hints.length >= 16) { s.phase = 'reveal'; s.got = -1; s.from = now; s.until = now + 7000; return; }
@@ -207,7 +242,49 @@ function wrong(s, seat, now) {
   if (range(s.n).every(i => s.excl.includes(i))) return nextHint(s, now);
   s.phase = 'buzz'; s.from = now; s.until = now + s.win * 1000;
 }
+function record(s) { s.past.push({ name: ruleName(s), X: s.X, Y: s.Y, answer: s.answer, got: s.got, hints: s.hints.length }); }
 function end(s) {
   const ord = range(s.n).sort((a, b) => s.sc[b] - s.sc[a]);
   s.over = { winners: ord.filter(i => s.sc[i] === s.sc[ord[0]]), rows: ord.map(i => ({ i, v: `${s.sc[i]}점` })) };
 }
+
+export default game;
+Object.assign(game, {
+  job(s, ready) {
+    if (s.phase !== 'gen') return null;
+    return {
+      key: 'gen' + s.round,
+      run: () => (ready ? genRule(s) : Promise.resolve(null)),
+      apply(s2, data) { if (s2.phase !== 'gen') return; if (data) s2.custom = data; else libRule(s2); beginRound(s2); fx(s2, 'start'); },
+    };
+  },
+  brief: (s, me) => `미스터리 사인 ${s.round}/${s.rounds}라운드, 문제 ${s.X} ? ${s.Y}. 힌트 ${s.hints.length}개 공개. 점수: 너 ${s.sc[me]}, 최고 ${Math.max(...s.sc)}.`,
+  summary: (s, names) => `최종 점수: ${range(s.n).map(i => `${names[i]} ${s.sc[i]}`).join(', ')}\n${s.past.map((p, k) => `${k + 1}R 규칙 "${p.name}", ${p.X}?${p.Y}=${p.answer}, 힌트 ${p.hints}개 만에 ${p.got >= 0 ? names[p.got] + ' 정답' : '정답자 없음'}`).join('\n')}`,
+  eventText: (s, f, me, names) => f.kind === 'wrong' ? `${f.seat === me ? '네가' : names[f.seat] + '이(가)'} 오답을 냈다` : f.kind === 'right' ? `${f.seat === me ? '네가' : names[f.seat] + '이(가)'} 정답을 맞혔다. 규칙은 "${ruleName(s)}"` : null,
+  async llm(s, me, ctx) {
+    if (s.phase === 'answer' && s.ans === me) {
+      const v = (s.llmAns || {})[me];
+      return v != null ? { a: { answer: v }, fast: true } : null;
+    }
+    if (s.phase !== 'buzz' || s.excl.includes(me) || s.passed.includes(me)) return null;
+    s.llmTry = s.llmTry || {};
+    const key = `${s.round}-${s.hints.length}-${s.excl.length}`;
+    if (s.llmTry[me] === key) return null;
+    s.llmTry[me] = key;
+    const vis = s.hints.map((h, k) => { const hide = side => h.hid.includes(h.by[side]) && h.by[side] !== me; return hide(0) || hide(1) ? `${k + 1}. (비공개 숫자 포함) = ${h.r}` : `${k + 1}. ${h.a} ? ${h.b} = ${h.r}`; }).join('\n');
+    const r = await LLM.json(`숨겨진 연산 ?를 추론하는 퍼즐. 앞 숫자 a, 뒤 숫자 b.
+예시:
+${vis}
+이번 라운드에 이미 틀린 답: ${s.wrongs.join(', ') || '없음'}
+문제: ${s.X} ? ${s.Y} = ?
+규칙을 추론하고 문제의 값을 구해라. 모든 예시를 만족하는지 꼭 검산해라. 확신도는 정직하게.
+JSON으로만 답: {"rule": "추론한 규칙", "answer": 정수, "confidence": 0~1}`, { timeout: 25000, temperature: .2 });
+    const conf = +r.confidence || 0, ans = Math.round(+r.answer);
+    const need = s.hints.length >= 10 ? .6 : .8;
+    if (Number.isFinite(ans) && conf >= need && !s.wrongs.includes(ans)) {
+      s.llmAns = s.llmAns || {}; s.llmAns[me] = ans;
+      return { a: { buzz: true }, fast: true, note: `${s.round}R 힌트 ${s.hints.length}개: "${String(r.rule || '').slice(0, 50)}"로 추론, ${ans} (확신 ${Math.round(conf * 100)}%)` };
+    }
+    return { a: { pass: true }, fast: true };
+  },
+});

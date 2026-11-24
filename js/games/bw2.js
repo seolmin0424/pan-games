@@ -75,6 +75,7 @@ export default {
   ],
   llm: llmMove,
   brief,
+  summary: (s, names) => `최종 승점 ${names[0]} ${s.sc[0]} : ${names[1]} ${s.sc[1]}\n${s.hist.map(h => `${h.ext ? '연장 ' : ''}${h.r}R 선 ${names[h.f]}: ${names[0]} ${h.b[0]} vs ${names[1]} ${h.b[1]} → ${h.w < 0 ? '무' : names[h.w] + ' 승'}`).join('\n')}`,
   learn(s, seats) {
     const prof = loadProf();
     let pts = [99, 99], ext = 0, sc = [0, 0];

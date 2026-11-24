@@ -39,7 +39,7 @@ function genMaze() {
   return {};
 }
 
-export default {
+const game = {
   id: 'maze', title: '기억의 미로', src: '더 지니어스: 블랙 가넷', players: [2, 2], def: 2,
   glyph: `<svg viewBox="0 0 44 44"><rect x="5" y="5" width="34" height="34" rx="3" fill="none" stroke="var(--line-2)"/><path d="M5 16h12M17 16v12M28 5v14M28 28h11" stroke="var(--line-2)" stroke-width="2.5" stroke-dasharray="3 3"/><circle cx="11" cy="33" r="4" fill="var(--p0)"/><rect x="29" y="8" width="7" height="7" rx="1.5" fill="none" stroke="var(--p0)" stroke-width="2"/></svg>`,
   rules: [
@@ -141,3 +141,10 @@ export default {
 };
 
 function endTurn(s) { s.turn = 1 - s.turn; s.steps = 0; s.need = 3; s.trail = []; }
+
+export default game;
+Object.assign(game, {
+  brief: (s, me) => `기억의 미로. 너의 걸음 ${s.moves[me]}, 부딪힌 횟수 ${s.hits.filter(h => h.seat === me).length}, 상대 부딪힌 횟수 ${s.hits.filter(h => h.seat !== me).length}. 더블찬스 너 ${s.dbl[me]}회 남음.`,
+  summary: (s, names) => [0, 1].map(i => `${names[i]}: ${s.moves[i]}걸음, 벽 충돌 ${s.hits.filter(h => h.seat === i).length}회`).join('\n'),
+  eventText: (s, f, me, names) => f.kind === 'hit' ? `${f.seat === me ? '네가' : names[f.seat] + '이(가)'} 벽에 부딪혀 출발점으로 돌아갔다` : f.kind === 'dbl' ? `${s.turn === me ? '네가' : names[s.turn] + '이(가)'} 더블찬스를 썼다` : null,
+});

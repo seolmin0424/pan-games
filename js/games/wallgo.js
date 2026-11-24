@@ -71,7 +71,7 @@ function evalFor(s, me) {
   return (v[me] - Math.max(...others.map(o => v[o]))) + closed[me] * .6 - Math.max(...others.map(o => closed[o])) * .3;
 }
 
-export default {
+const game = {
   id: 'wallgo', title: '벽바둑 2', src: '데블스 플랜: 데드 어게인', players: [2, 4], def: 3,
   glyph: `<svg viewBox="0 0 44 44"><rect x="5" y="5" width="34" height="34" rx="3" fill="none" stroke="var(--line-2)"/><path d="M5 20h16M21 20v19" stroke="var(--ink)" stroke-width="3" stroke-linecap="round"/><rect x="9" y="25" width="8" height="8" rx="2" fill="var(--p0)"/><circle cx="31" cy="13" r="4.5" fill="var(--p1)"/></svg>`,
   rules: [
@@ -261,3 +261,10 @@ export default {
       <div class="board-wrap"><div>${svg}</div><div class="side">${panel}<div class="panel"><h3>영역</h3>${range(s.n).map(i => `<div class="spread small"><span>${nm(ctx, i)}</span><span style="font-family:var(--font-num)">확보 ${closed[i]}칸</span></div>`).join('')}</div></div></div>`;
   },
 };
+
+export default game;
+Object.assign(game, {
+  brief: (s, me) => { const { closed } = scores(s); return `벽바둑 2 (7x7). ${s.phase === 'place' ? '말 배치 중' : `${s.turns}번째 수`}. 확보한 칸: 너 ${closed[me]}, 상대 최대 ${Math.max(...closed.filter((_, i) => i !== me))}.`; },
+  summary: (s, names) => { const { sc } = scores(s); return `총 ${s.turns}수. 최종 영역: ${range(s.n).map(i => `${names[i]} ${sc[i]}칸`).join(', ')}. 벽 ${Object.keys(s.walls).length}개.`; },
+  myEvent: (s, i) => { const { closed } = scores(s); return `네가 말을 옮기고 벽을 세웠다. 지금 확보 ${closed[i]}칸`; },
+});

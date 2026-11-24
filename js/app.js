@@ -141,12 +141,12 @@ function renderSetup() {
             <option value="ai" ${s.type === 'ai' ? 'selected' : ''}>AI</option>
             <option value="remote" ${s.type === 'remote' ? 'selected' : ''} ${i === 0 ? 'disabled' : ''}>온라인</option>
           </select>
-          ${s.type === 'ai' ? `<select data-cmd="level" data-v="${i}" aria-label="AI 수준">${LEVELS.map((l, k) => `<option value="${k}" ${s.level === k ? 'selected' : ''}>${l}</option>`).join('')}${g.llm ? `<option value="${GEMINI}" ${s.level === GEMINI ? 'selected' : ''} ${LLM.ready() ? '' : 'disabled'}>Gemini${LLM.ready() ? '' : ' (키 필요)'}</option>` : ''}</select>` : '<span></span>'}
+          ${s.type === 'ai' ? `<select data-cmd="level" data-v="${i}" aria-label="AI 수준">${LEVELS.map((l, k) => `<option value="${k}" ${s.level === k ? 'selected' : ''}>${l}</option>`).join('')}${g.llm || g.brief ? `<option value="${GEMINI}" ${s.level === GEMINI ? 'selected' : ''} ${LLM.ready() ? '' : 'disabled'}>Gemini${LLM.ready() ? '' : ' (키 필요)'}</option>` : ''}</select>` : '<span></span>'}
           ${s.type === 'ai' && s.level === GEMINI ? `<span></span><span class="muted small">성격</span><select data-cmd="persona" data-v="${i}" aria-label="성격">${Object.entries(LLM.PERSONAS).map(([k, p]) => `<option value="${k}" ${(s.persona || 'bluff') === k ? 'selected' : ''}>${p.name}</option>`).join('')}</select><span></span>` : ''}
         </div>`).join('')}
       </div>
       ${(g.options || []).length ? `<div class="panel"><h3>설정</h3>${g.options.map(o => `
-        <div class="optrow"><span>${esc(o.label)}</span><div class="seg">${o.ch.map(([v, l]) => `<button data-cmd="opt" data-v="${esc(JSON.stringify([o.k, v]))}" class="${S.opts[o.k] === v ? 'on' : ''}">${esc(l)}</button>`).join('')}</div></div>`).join('')}</div>` : ''}
+        <div class="optrow"><span>${esc(o.label)}</span><div class="seg">${o.ch.map(([v, l]) => `<button data-cmd="opt" data-v="${esc(JSON.stringify([o.k, v]))}" class="${S.opts[o.k] === v ? 'on' : ''}" ${String(l).startsWith('Gemini') && !LLM.ready() ? 'disabled title="Gemini 키 필요"' : ''}>${esc(l)}</button>`).join('')}</div></div>`).join('')}</div>` : ''}
       ${hasRemote ? `<div class="panel"><h3>온라인 방</h3>${G.room ? `
         <div class="roomline"><span class="code">${G.room.code}</span><button class="btn sm" data-cmd="copy" data-v="${esc(link)}">링크 복사</button></div>
         <p class="note mt">${G.room.ready ? '이 코드나 링크로 들어오면 빈 온라인 자리에 앉아요.' : (G.room.err ? esc(G.room.err) : '방 여는 중')}</p>` : '<p class="note">방 여는 중</p>'}</div>` : ''}
@@ -300,9 +300,11 @@ function showResult(ctx) {
     ${o.note ? `<p class="muted mt">${o.note}</p>` : ''}
     <p class="say mt small" style="text-align:left"></p>
     <ol>${(o.rows || []).map(r => `<li><span style="color:${pc(r.i)}">${esc(ctx.names[r.i])}</span><span>${esc(r.v)}</span></li>`).join('')}</ol>
-    <div class="row" style="justify-content:center">${host ? '<button class="btn primary" data-cmd="again">다시 하기</button><button class="btn" data-cmd="tosetup">설정</button>' : '<span class="note">방장이 다시 시작하면 이어져요</span>'}<button class="btn ghost" data-cmd="closeres">보드 보기</button></div>
+    <p class="coach small mt" style="text-align:left;white-space:pre-line;color:var(--ink-2)"></p>
+    <div class="row" style="justify-content:center">${host ? '<button class="btn primary" data-cmd="again">다시 하기</button><button class="btn" data-cmd="tosetup">설정</button>' : '<span class="note">방장이 다시 시작하면 이어져요</span>'}${host && LLM.ready() && (ctx.g.summary || ctx.g.postgame) ? '<button class="btn" data-cmd="coach">복기</button>' : ''}<button class="btn ghost" data-cmd="closeres">보드 보기</button></div>
   </div>`;
   document.body.appendChild(wrap);
+  { const c = (st.chat || []).filter(x => x.at > (st.overAt || 0)).slice(-1)[0]; if (c) wrap.querySelector('.say').innerHTML = `<b style="color:${pc(c.i)}">${esc(ctx.names[c.i])}</b> ${esc(c.t)}`; }
   if (lost) { document.getElementById('stage')?.animate([{ filter: 'grayscale(0)' }, { filter: 'grayscale(.85) brightness(.8)' }], { duration: 1600, fill: 'forwards' }); FX.lose(); }
   else FX.win();
 }
@@ -395,7 +397,7 @@ root.addEventListener('change', e => {
   if (c.dataset.cmd === 'type') {
     const s = S.seats[i]; if (s.conn) { s.conn.close(); s.conn = null; }
     s.type = c.value;
-    if (s.type === 'ai') { s.level = s.level ?? 1; s.name = AI_NAMES[i % AI_NAMES.length]; }
+    if (s.type === 'ai') { s.level = s.level ?? 1; s.name = AI_NAMES.find(n => !S.seats.some(x => x !== s && x.name === n)) || `AI ${i + 1}`; }
     if (s.type === 'human') s.name = i === 0 ? '나' : `P${i + 1}`;
     if (s.type === 'remote') s.name = '대기 중';
     ensureRoom(); render(); pushLobby();
@@ -442,6 +444,15 @@ function cmd(c, v, el) {
   if (c === 'opt') { const [k, val] = JSON.parse(v); S.opts[k] = val; render(); pushLobby(); }
   if (c === 'start') startGame();
   if (c === 'gemini') openGemini();
+  if (c === 'coach') {
+    const ctx = makeCtx(), out = document.querySelector('.result .coach'); if (!out || !G.engine) return;
+    el.disabled = true; out.textContent = '분석 중'; out.classList.add('think');
+    const tmp = document.createElement('div'); tmp.innerHTML = ctx.g.rules.join(' ');
+    const focus = ctx.seat >= 0 ? ctx.seat : (ctx.locals || [])[0];
+    LLM.coach(ctx.g.title, tmp.textContent, ctx.g.summary(G.engine.state, names()), names(), focus)
+      .then(t => { out.textContent = t; }).catch(() => { out.textContent = '분석을 불러오지 못했어요.'; el.disabled = false; })
+      .finally(() => out.classList.remove('think'));
+  }
   if (c === 'copy') { navigator.clipboard?.writeText(v).then(() => { el.textContent = '복사됨'; setTimeout(() => { el.textContent = '링크 복사'; }, 1400); }); }
   if (c === 'reveal') { curtainSeat = +v; renderStage(); }
   if (c === 'again') { closeResult(); startGame(); }

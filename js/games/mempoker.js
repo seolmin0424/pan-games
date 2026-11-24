@@ -24,7 +24,7 @@ export const cmp = (a, b) => { for (let i = 0; i < Math.max(a.length, b.length);
 
 export const cardHTML = (c, cls = '') => `<div class="pcard ${c.s === 1 || c.s === 2 ? 'red' : ''} ${cls}"><span>${rn(c.r)}</span><span class="s">${SUITS[c.s]}&#xFE0E;</span></div>`;
 
-export default {
+const game = {
   id: 'mempoker', title: '기억 포커', src: '데블스 플랜: 데드 어게인', players: [2, 4], def: 2,
   isPrivate: s => s.phase === 'pick',
   glyph: `<svg viewBox="0 0 44 44"><rect x="6" y="9" width="18" height="25" rx="3" fill="var(--card)" transform="rotate(-10 15 21)"/><rect x="20" y="9" width="18" height="25" rx="3" fill="var(--raise)" stroke="var(--line-2)" transform="rotate(8 29 21)"/><text x="10" y="24" font-size="11" fill="var(--card-red)" font-family="serif" transform="rotate(-10 15 21)">A</text></svg>`,
@@ -119,3 +119,10 @@ function deal(s, now) {
   s.phase = 'memo'; s.start = now; s.until = now + s.memo * 1000; s.round++;
   fx(s, 'deal');
 }
+
+export default game;
+Object.assign(game, {
+  brief: (s, me) => `기억 포커 ${s.round}번째 판, 목표 ${s.goal}승. 승수: 너 ${s.wins[me]}, 최다 ${Math.max(...s.wins)}. ${s.phase === 'memo' ? '지금 카드 암기 중' : s.phase === 'pick' ? '카드 고르는 중' : '공개 중'}.`,
+  summary: (s, names) => `최종 승수: ${range(s.n).map(i => `${names[i]} ${s.wins[i]}승`).join(', ')}. 총 ${s.round}판.`,
+  eventText: (s, f, me, names) => f.kind === 'reveal' && s.hands ? `패 공개: ${range(s.n).map(i => `${i === me ? '너' : names[i]} ${HN[s.hands[i][0]]}`).join(', ')}. ${s.rwin.length ? (s.rwin.includes(me) ? '네가 이겼다' : names[s.rwin[0]] + ' 승') : '무승부'}` : null,
+});

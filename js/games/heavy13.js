@@ -1,4 +1,5 @@
 import { esc, rint, rand, act, ui, pc, nm, hud, fx, range, sum } from '../util.js';
+import * as LLM from '../llm.js';
 
 const COLS = ['R', 'G', 'B'];
 const CNAME = { R: '빨강', G: '초록', B: '파랑', W: '레인보우' };
@@ -7,7 +8,7 @@ const RAINBOW = 'conic-gradient(var(--red), var(--p2), var(--green), var(--blue)
 const chipBg = c => c === 'W' ? RAINBOW : CVAR[c];
 const freshSet = () => ({ cards: [0, 1, 2, 3, 4, 5, 6], chips: { R: 2, G: 2, B: 2, W: 1 } });
 
-export default {
+const game = {
   id: 'heavy13', title: '무거운 13', src: '데블스 플랜: 데드 어게인', players: [3, 7], def: 5, private: true,
   glyph: `<svg viewBox="0 0 44 44"><rect x="6" y="28" width="9" height="9" rx="2" fill="var(--red)"/><rect x="6" y="18" width="9" height="9" rx="2" fill="var(--red)" opacity=".7"/><rect x="18" y="28" width="9" height="9" rx="2" fill="var(--green)"/><rect x="30" y="28" width="9" height="9" rx="2" fill="var(--blue)"/><rect x="30" y="18" width="9" height="9" rx="2" fill="var(--blue)" opacity=".7"/><rect x="30" y="8" width="9" height="9" rx="2" fill="var(--blue)" opacity=".45"/></svg>`,
   rules: [
@@ -153,10 +154,11 @@ function afterStep(s) {
   if ((s.round - 1) % 7 === 0) s.hands = range(s.n).map(freshSet);
 }
 
-function aiSubmit(s, me, lv) {
+function aiSubmit(s, me, lv) { return aiOptions(s, me, lv)[0]; }
+function aiOptions(s, me, lv) {
   const h = s.hands[me], n = s.n;
   const sums = Object.fromEntries(COLS.map(c => [c, sum(s.stands[c])]));
-  let best = null, bs = Infinity;
+  const list = [];
   for (const card of h.cards) for (const chip of ['R', 'G', 'B', 'W']) {
     if (!h.chips[chip]) continue;
     const before = (n - 1) * ((6 - card) / 6) * (chip === 'W' ? .1 : 1);
@@ -169,8 +171,56 @@ function aiSubmit(s, me, lv) {
       const risk = exp >= 13 ? len : exp >= 10 ? len * (exp - 9) / 4 : 0;
       cost = Math.min(cost, risk);
     }
+    const risk = cost;
     cost += (chip === 'W' ? 1.2 : 0) + (card === 0 ? .9 : 0) + (lv === 0 ? Math.random() * 3 : Math.random() * .6);
-    if (cost < bs) { bs = cost; best = { card, chip }; }
+    list.push({ card, chip, cost, risk });
   }
-  return best;
+  return list.sort((a, b) => a.cost - b.cost);
 }
+
+function brief(s, me) {
+  const sums = COLS.map(c => `${CNAME[c]} ${sum(s.stands[c])}`).join(', ');
+  return `무거운 13 ${s.round}/${s.rounds}라운드. 받침대 합: ${sums}. 너의 벌점 ${s.pen[me]}, 최다 벌점 ${Math.max(...s.pen)}, 최소 벌점 ${Math.min(...s.pen)}.`;
+}
+const named = (l, names) => l.replace(/§(\d+)§/g, (_, i) => names[+i]);
+
+async function llmMove(s, me, ctx) {
+  if (s.phase !== 'submit' || s.subs[me]) return null;
+  const names = ctx.names, h = s.hands[me];
+  const opts = aiOptions(s, me, 2).slice(0, 8);
+  const others = range(s.n).filter(i => i !== me).map(i => `${names[i]}: 벌점 ${s.pen[i]}, 남은 카드 [${s.hands[i].cards.join(',')}], 남은 칩 빨${s.hands[i].chips.R} 초${s.hands[i].chips.G} 파${s.hands[i].chips.B} 레${s.hands[i].chips.W}`).join('\n');
+  const prompt = `너는 두뇌 서바이벌 "무거운 13"의 플레이어 "${names[me]}"다. ${LLM.personaLine(ctx.persona)}
+
+[규칙] 빨강·초록·파랑 받침대 3개. 매 라운드 모두가 바위 카드(0~6) 1장과 색 칩 1개를 동시에 비공개로 낸다. 놓는 순서는 레인보우 칩 먼저, 그다음 카드 숫자 큰 순, 같으면 선부터 시계 방향. 칩 색 받침대에 카드 숫자만큼의 큐브를 놓는다(레인보우는 놓을 때 색을 고름). 놓아서 받침대 합이 13 이상이 되면 그 받침대에 있던 큐브 개수만큼 벌점을 받고, 큐브는 다 치워지고 내 큐브만 남는다. 놓을 차례에 라운드당 한 번 패스하면 맨 마지막(패스 역순)에 놓는다. 7라운드마다 카드·칩 리필, 받침대 유지. 14라운드 후 벌점이 적을수록 높은 순위.
+
+[현재] ${s.round}/${s.rounds}라운드. 선: ${names[s.start]}.
+받침대: ${COLS.map(c => `${CNAME[c]} 합 ${sum(s.stands[c])} (큐브 ${s.stands[c].length}개: ${s.stands[c].join(',') || '없음'})`).join(' / ')}
+너: 벌점 ${s.pen[me]}, 남은 카드 [${h.cards.join(',')}], 남은 칩 빨${h.chips.R} 초${h.chips.G} 파${h.chips.B} 레${h.chips.W}
+다른 플레이어(공개 정보):
+${others}
+
+[최근 기록]
+${s.log.slice(0, 10).map(l => named(l, names)).join('\n') || '없음'}
+
+[대화]
+${LLM.chatLog(s, names)}
+
+[계산 엔진이 매긴 후보 (위험도 낮은 순, 0이면 안전)]
+${opts.map(o => `카드 ${o.card} + ${CNAME[o.chip]}: 위험도 ${o.risk.toFixed(2)}`).join('\n')}
+
+다른 사람들이 무엇을 낼지(남은 카드와 칩으로 추론), 큐브가 많이 쌓인 받침대를 남에게 떠넘길 수 있는지, 아껴야 할 카드(0, 레인보우)를 고려해서 골라라.
+JSON으로만 답: {"card": 정수, "chip": "R"|"G"|"B"|"W", "say": "다른 참가자에게 던지는 한 마디, 30자 이내, 캐릭터 말투, 이모지 금지, 실제로 낸 카드는 밝히지 말 것", "note": "진짜 의도 한 문장"}`;
+  const r = await LLM.json(prompt, { timeout: 15000 });
+  const card = Math.round(+r.card), chip = String(r.chip || '').toUpperCase();
+  if (!h.cards.includes(card) || !(h.chips[chip] > 0)) return null;
+  return { a: { card, chip }, say: Math.random() < .45 ? r.say : '', note: r.note ? `${s.round}R 카드 ${card} ${CNAME[chip]}: ${r.note}` : '' };
+}
+
+Object.assign(game, {
+  llm: llmMove,
+  brief,
+  summary: (s, names) => `최종 벌점: ${range(s.n).map(i => `${names[i]} ${s.pen[i]}`).join(', ')}\n주요 기록:\n${s.log.filter(l => l.includes('벌점')).slice(0, 15).map(l => named(l, names)).join('\n')}`,
+  eventText: (s, f, me, names) => f.kind === 'place' && f.hit ? `${f.seat === me ? '네가' : names[f.seat] + '이(가)'} ${CNAME[f.col]} 받침대를 터뜨려 벌점 ${f.hit}점을 받았다` : null,
+});
+
+export default game;

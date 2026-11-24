@@ -51,6 +51,31 @@ export function chatLog(state, names, n = 12) {
   return (state.chat || []).slice(-n).map(c => `${names[c.i] ?? '?'}: ${c.t}`).join('\n') || '(없음)';
 }
 
+// unprompted table talk after an event
+export async function talk(state, seat, names, persona, brief, event) {
+  const p = `너는 한국 두뇌 서바이벌 예능의 참가자 "${names[seat]}"다. ${personaLine(persona)}
+지금 상황: ${brief}
+방금 일어난 일: ${event}
+최근 대화:
+${chatLog(state, names, 8)}
+다른 참가자들에게 캐릭터답게 한 마디. 30자 이내, 이모지 금지, 같은 말 반복 금지. 숨겨진 정보는 사실대로 밝히지 마라.
+JSON으로만 답: {"say": "..."}`;
+  const r = await json(p, { timeout: 10000 });
+  return String(r.say || '').slice(0, 80);
+}
+
+// post-game review for humans
+export async function coach(title, rules, summary, names, focus) {
+  const p = `너는 두뇌 게임 "${title}" 전문 해설가다.
+규칙 요약: ${rules}
+경기 기록:
+${summary}
+${focus != null ? `"${names[focus]}"의 관점에서` : '전체적으로'} 승부를 가른 순간 1~2개와, 다음 판에 써먹을 구체적인 조언 2개를 한국어로 짧게. 총 250자 이내. 마크다운 금지, 줄바꿈으로 구분.
+JSON으로만 답: {"text": "..."}`;
+  const r = await json(p, { timeout: 25000, temperature: .7 });
+  return String(r.text || '').slice(0, 600);
+}
+
 // in-character reply to table talk
 export async function reply(state, seat, names, persona, brief) {
   const p = `너는 한국 두뇌 서바이벌 예능의 참가자 "${names[seat]}"다. ${personaLine(persona)}
