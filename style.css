@@ -240,6 +240,11 @@ input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer
 .lamp.on { background: var(--seg); box-shadow: 0 0 12px -2px var(--seg); }
 
 .note { color: var(--muted); font-size: 14px; }
+.bubble { position: relative; background: var(--ink); color: var(--bg); border-radius: 12px; padding: 9px 13px; font-size: 15px; line-height: 1.4; transform-origin: top left; }
+.bubble::before { content: ""; position: absolute; top: -6px; left: 18px; width: 12px; height: 12px; background: var(--ink); transform: rotate(45deg); border-radius: 2px; }
+.think { animation: glow 1.1s ease-in-out infinite; }
+.chatlog { max-height: 200px; }
+.chatlog div { border-bottom: 0; padding: 2px 0; }
 .big-num { font-family: var(--font-num); font-size: 56px; font-weight: 600; line-height: 1; }
 .kbd { font-family: var(--font-num); border: 1px solid var(--line-2); border-radius: 4px; padding: 0 6px; font-size: 13px; color: var(--muted); }
 

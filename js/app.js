@@ -1,8 +1,9 @@
 import { GAMES } from './games/index.js';
 import { esc, pc, range } from './util.js';
-import { Engine } from './engine.js';
+import { Engine, GEMINI } from './engine.js';
 import * as net from './net.js';
 import * as FX from './fx.js';
+import * as LLM from './llm.js';
 
 const root = document.getElementById('app');
 const byId = id => GAMES.find(g => g.id === id);
@@ -11,7 +12,62 @@ const AI_NAMES = ['도윤', '서아', '하준', '지우', '이안', '나은', '�
 
 let G = { screen: 'home' };
 let uiStore = {};
-let lastFx = 0, resultShownFor = null, curtainSeat = null, stageKey = '';
+let lastFx = 0, resultShownFor = null, curtainSeat = null, stageKey = '', lastChat = 0;
+
+/* ---------- Gemini settings ---------- */
+function openGemini() {
+  const wrap = document.createElement('div');
+  wrap.className = 'result';
+  wrap.innerHTML = `<form class="card-r" style="text-align:left" data-gform>
+    <h2 style="font-size:32px">Gemini</h2>
+    <p class="note mt">키는 이 브라우저에만 저장돼요.</p>
+    <label class="col mt" style="gap:6px"><span class="small">API 키</span><input type="password" name="k" value="${esc(LLM.key())}" autocomplete="off" placeholder="AIza…"></label>
+    <label class="col mt" style="gap:6px"><span class="small">모델</span><select name="m"><option>${esc(LLM.model())}</option></select></label>
+    <p class="note mt" data-gstat></p>
+    <div class="row mt2"><button class="btn" type="button" data-gtest>키 확인</button><button class="btn primary" type="submit">저장</button><button class="btn ghost" type="button" data-gclose>닫기</button>${LLM.key() ? '<button class="btn ghost" type="button" data-gdel>키 삭제</button>' : ''}</div>
+  </form>`;
+  document.body.appendChild(wrap);
+  const f = wrap.querySelector('form'), st = wrap.querySelector('[data-gstat]'), sel = f.m;
+  const test = async () => {
+    st.textContent = '확인 중';
+    try {
+      const names = await LLM.listModels(f.k.value.trim());
+      const cur = LLM.model(), def = names.includes(cur) ? cur : LLM.pickDefault(names);
+      sel.innerHTML = names.map(n => `<option ${n === def ? 'selected' : ''}>${esc(n)}</option>`).join('');
+      st.textContent = `연결됨. 모델 ${names.length}개`;
+    } catch (e) { st.textContent = e.message; }
+  };
+  wrap.querySelector('[data-gtest]').onclick = test;
+  wrap.querySelector('[data-gclose]').onclick = () => wrap.remove();
+  const del = wrap.querySelector('[data-gdel]'); if (del) del.onclick = () => { LLM.save('', ''); wrap.remove(); render(); };
+  f.onsubmit = e => { e.preventDefault(); LLM.save(f.k.value, sel.value); wrap.remove(); render(); };
+  if (LLM.key()) test();
+}
+
+/* ---------- chat ---------- */
+function chatHTML(ctx) {
+  const st = ctx.state;
+  const show = (st.chat && st.chat.length) || G.engine?.seats.some((s, i) => G.engine.usesGemini(i)) || ctx.online;
+  if (!show) return '';
+  const sender = ctx.actors && ctx.actors.length ? ctx.actors[0] : (ctx.locals || [])[0];
+  const notes = st.over && st.notes && st.notes.length ? `<div class="panel mt"><h3>${esc(ctx.names[st.notes[0].i])}의 속마음</h3><div class="log">${st.notes.map(n => `<div>${esc(n.t)}</div>`).join('')}</div></div>` : '';
+  return `<div class="panel"><h3>대화</h3>
+    <div class="log chatlog">${(st.chat || []).map(c => `<div><b style="color:${pc(c.i)};font-weight:600">${esc(ctx.names[c.i])}</b> ${esc(c.t)}</div>`).join('') || '<span class="muted">-</span>'}</div>
+    ${sender != null ? `<form class="row mt" data-form="chat"><input type="hidden" name="s" value="${sender}"><input id="chatin" data-keep="chat" type="text" name="t" maxlength="80" placeholder="한 마디" style="flex:1;min-width:0" autocomplete="off"><button class="btn sm" type="submit">보내기</button></form>` : ''}
+  </div>${notes}`;
+}
+
+let chatKey = '';
+function renderChat(ctx) {
+  const el = document.getElementById('chat'); if (!el) return;
+  const st = ctx.state;
+  const k = `${ctx.gid}|${st.chatId || 0}|${!!st.over}|${(st.notes || []).length}|${(ctx.actors || []).join()}`;
+  if (k === chatKey) return; chatKey = k;
+  const inp = el.querySelector('#chatin'); const v = inp ? inp.value : '', foc = inp && document.activeElement === inp;
+  el.innerHTML = chatHTML(ctx);
+  const ni = el.querySelector('#chatin'); if (ni) { ni.value = v; if (foc) ni.focus(); }
+  const log = el.querySelector('.chatlog'); if (log) log.scrollTop = log.scrollHeight;
+}
 
 /* ---------- top-level render ---------- */
 function render() {
@@ -21,7 +77,7 @@ function render() {
   if (G.screen === 'play') return renderPlayFrame();
 }
 
-const topbar = (right = '') => `<header class="wrap top"><button class="mark" data-go="home">판<span>.</span></button><div class="sp"></div>${right}</header>`;
+const topbar = (right = '') => `<header class="wrap top"><button class="mark" data-go="home">판<span>.</span></button><div class="sp"></div>${right}${G.guest ? '' : `<button class="btn sm ghost" data-cmd="gemini">Gemini${LLM.ready() ? '' : ' 연결'}</button>`}</header>`;
 
 function renderHome() {
   const code = (location.hash.match(/join=([A-Za-z0-9]+)/) || [])[1] || '';
@@ -85,7 +141,8 @@ function renderSetup() {
             <option value="ai" ${s.type === 'ai' ? 'selected' : ''}>AI</option>
             <option value="remote" ${s.type === 'remote' ? 'selected' : ''} ${i === 0 ? 'disabled' : ''}>온라인</option>
           </select>
-          ${s.type === 'ai' ? `<select data-cmd="level" data-v="${i}" aria-label="AI 수준">${LEVELS.map((l, k) => `<option value="${k}" ${s.level === k ? 'selected' : ''}>${l}</option>`).join('')}</select>` : '<span></span>'}
+          ${s.type === 'ai' ? `<select data-cmd="level" data-v="${i}" aria-label="AI 수준">${LEVELS.map((l, k) => `<option value="${k}" ${s.level === k ? 'selected' : ''}>${l}</option>`).join('')}${g.llm ? `<option value="${GEMINI}" ${s.level === GEMINI ? 'selected' : ''} ${LLM.ready() ? '' : 'disabled'}>Gemini${LLM.ready() ? '' : ' (키 필요)'}</option>` : ''}</select>` : '<span></span>'}
+          ${s.type === 'ai' && s.level === GEMINI ? `<span></span><span class="muted small">성격</span><select data-cmd="persona" data-v="${i}" aria-label="성격">${Object.entries(LLM.PERSONAS).map(([k, p]) => `<option value="${k}" ${(s.persona || 'bluff') === k ? 'selected' : ''}>${p.name}</option>`).join('')}</select><span></span>` : ''}
         </div>`).join('')}
       </div>
       ${(g.options || []).length ? `<div class="panel"><h3>설정</h3>${g.options.map(o => `
@@ -164,7 +221,7 @@ function renderPlayFrame() {
   const g = byId(isGuest ? G.guest.game : G.setup.game);
   const code = isGuest ? G.guest.code : G.room?.code;
   root.innerHTML = `${topbar(`${code ? `<span class="ctx">방 <b class="code" style="font-size:16px">${esc(code)}</b></span>` : ''}<span class="ctx">${esc(g.title)}</span>${isGuest ? '' : '<button class="btn sm ghost" data-cmd="tosetup">설정</button>'}`)}
-  <main class="wrap play"><div class="stage" id="stage"></div></main>`;
+  <main class="wrap play"><div class="stage" id="stage"></div><div id="chat" class="mt2" style="max-width:640px"></div></main>`;
   stageKey = '';
   renderStage();
 }
@@ -210,6 +267,8 @@ function renderStage() {
   }
   const st = ctx.state;
   const fresh = st.fx && st.fx.id !== lastFx ? st.fx : null;
+  ctx.newChat = st.chatId && st.chatId !== lastChat ? st.chat[st.chat.length - 1] : null;
+  renderChat(ctx);
   ctx.fresh = kind => fresh && (!kind || fresh.kind === kind) ? fresh : null;
   // preserve inputs
   const keep = {};
@@ -223,6 +282,8 @@ function renderStage() {
     el.querySelectorAll('[data-burst]').forEach(b => FX.burst(b, b.dataset.burst || undefined));
   }
   tickTimers();
+  lastChat = st.chatId || 0;
+  const rs = document.querySelector('.result .say'); if (rs && st.over) { const c = (st.chat || []).filter(x => x.at > (st.overAt || 0)).slice(-1)[0]; if (c) { rs.innerHTML = `<b style="color:${pc(c.i)}">${esc(ctx.names[c.i])}</b> ${esc(c.t)}`; } }
   if (st.over && resultShownFor !== ctx.gid) { resultShownFor = ctx.gid; setTimeout(() => showResult(ctx), 900); }
 }
 
@@ -237,6 +298,7 @@ function showResult(ctx) {
   wrap.innerHTML = `<div class="card-r" role="dialog" aria-label="결과">
     <h2>${esc(head)}</h2>
     ${o.note ? `<p class="muted mt">${o.note}</p>` : ''}
+    <p class="say mt small" style="text-align:left"></p>
     <ol>${(o.rows || []).map(r => `<li><span style="color:${pc(r.i)}">${esc(ctx.names[r.i])}</span><span>${esc(r.v)}</span></li>`).join('')}</ol>
     <div class="row" style="justify-content:center">${host ? '<button class="btn primary" data-cmd="again">다시 하기</button><button class="btn" data-cmd="tosetup">설정</button>' : '<span class="note">방장이 다시 시작하면 이어져요</span>'}<button class="btn ghost" data-cmd="closeres">보드 보기</button></div>
   </div>`;
@@ -338,7 +400,8 @@ root.addEventListener('change', e => {
     if (s.type === 'remote') s.name = '대기 중';
     ensureRoom(); render(); pushLobby();
   }
-  if (c.dataset.cmd === 'level') S.seats[i].level = +c.value;
+  if (c.dataset.cmd === 'level') { S.seats[i].level = +c.value; if (+c.value === GEMINI) { S.seats[i].persona = S.seats[i].persona || 'bluff'; } render(); }
+  if (c.dataset.cmd === 'persona') S.seats[i].persona = c.value;
 });
 
 root.addEventListener('submit', e => {
@@ -348,6 +411,11 @@ root.addEventListener('submit', e => {
   const fd = new FormData(f);
   if (f.dataset.form === 'join') joinRoom(String(fd.get('code') || ''));
   if (f.dataset.form === 'gname') { const n = String(fd.get('name') || '').trim().slice(0, 10); if (n) { G.guest.name = n; localStorageSet('pan-name', n); G.guest.conn?.send({ t: 'hello', name: n }); } }
+  if (f.dataset.form === 'chat') {
+    const t = String(fd.get('t') || '').trim(); if (!t) return;
+    const ctx = makeCtx(); ctx.send(+fd.get('s'), { chat: t }); f.querySelector('#chatin').value = '';
+    return;
+  }
   if (f.dataset.form === 'game') {
     const ctx = makeCtx(); ctx.now = () => Date.now() + (ctx.offset || 0); ctx.ui = uiStore;
     ctx.g.onForm && ctx.g.onForm(fd, ctx, f, e.submitter);
@@ -373,6 +441,7 @@ function cmd(c, v, el) {
   }
   if (c === 'opt') { const [k, val] = JSON.parse(v); S.opts[k] = val; render(); pushLobby(); }
   if (c === 'start') startGame();
+  if (c === 'gemini') openGemini();
   if (c === 'copy') { navigator.clipboard?.writeText(v).then(() => { el.textContent = '복사됨'; setTimeout(() => { el.textContent = '링크 복사'; }, 1400); }); }
   if (c === 'reveal') { curtainSeat = +v; renderStage(); }
   if (c === 'again') { closeResult(); startGame(); }
